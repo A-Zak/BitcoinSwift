@@ -49,14 +49,17 @@ public class ExtendedECKey : ECKey {
   public let parent: ExtendedECKey?
   
   
+  // This key's identifier (this corresponds exactly to a traditional bitcoin address)
   public var identifier:NSData {
     return publicKey.SHA256Hash().RIPEMD160Hash()
   }
   
+  // Return this key's fingerprint
   public var fingerprint:NSData {
     return self.identifier.subdataWithRange(NSMakeRange(0, 4))
   }
   
+  // Return the parent's fingerprint. 0x0000000 if master
   public var parentFingerprint:NSData {
     if let parent = parent {
       return parent.fingerprint
@@ -68,6 +71,7 @@ public class ExtendedECKey : ECKey {
     }
   }
   
+  // Find the depth of this key
   public var depth:UInt8 {
     if let parent = parent {
       return parent.depth + 1
@@ -77,9 +81,44 @@ public class ExtendedECKey : ECKey {
     }
   }
   
+  // True if this key has no parent
+  public var isMaster:Bool {
+    return self.parent == nil
+  }
   
+  // Find the master key by traversing the parents until a parentless key is found.
+  public var master:ExtendedECKey {
+    if let parent = self.parent {
+      return parent.master
+    }
+    else {
+      return self
+    }
+  }
   
-  public func extendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersion = .MainNet) -> NSMutableData {
+  // Return an array of path components from the master key.
+  // Add apostrophe (') to hardened indexes, and use the letter (m) to represent the master - to make an absolute path.
+  public var pathComponents:Array<String> {
+    if let parent = self.parent {
+      if let hIndex = self.hardenedIndex {
+        return parent.pathComponents + [NSNumber(unsignedInt: hIndex).stringValue + "'"]
+      }
+      else {
+        return parent.pathComponents + [NSNumber(unsignedInt: self.index).stringValue]
+      }
+    }
+    else {
+      return ["m"]
+    }
+  }
+  
+  // Combines the path components into a string path separated with slashes (\)
+  public var path:String {
+    return "\\".join(self.pathComponents)
+  }
+  
+  // Serialize the extended key data
+  public func serializeExtendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersion = .MainNet) -> NSMutableData {
     
     func keyDataForType(type:KeyType) -> NSData {
       
@@ -95,7 +134,6 @@ public class ExtendedECKey : ECKey {
       }
     }
     
-    
     let extKey = NSMutableData()
     
     extKey.appendUInt32(version.addressForKeyType(type), endianness: .BigEndian)    // address
@@ -103,23 +141,21 @@ public class ExtendedECKey : ECKey {
     extKey.appendData(self.parentFingerprint)                                       // parent fingerprint
     extKey.appendUInt32(self.index, endianness: .BigEndian)                         // child number
     extKey.appendData(self.chainCode.mutableData)                                   // chain code
-    
     extKey.appendData(keyDataForType(type))                                         // public/private key
     
     return extKey
   }
   
-  public func serializeExtendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersion = .MainNet) -> String {
+  // Encode the extended key into a base64check string
+  public func encodeExtendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersion = .MainNet) -> String {
     
-    let extKey = self.extendedKey(ofType: type, version: version)
+    let extKey = self.serializeExtendedKey(ofType: type, version: version)
     
     let checksum = extKey.SHA256Hash().SHA256Hash().subdataWithRange(NSRange(location: 0, length: 4))
     extKey.appendData(checksum)
     
     return extKey.base58String
   }
-  
-  
   
 
   /// Creates a new master extended key (both private and public).
@@ -190,7 +226,58 @@ public class ExtendedECKey : ECKey {
   }
 
   public func childKeyWithHardenedIndex(index: UInt32) -> ExtendedECKey? {
+    // guard agains overflows
+    if index > UInt32(UInt16.max) {
+      return nil
+    }
     return childKeyWithIndex(index + ExtendedECKey.hardenedIndexOffset())
+  }
+
+  // Derive a key from the path.
+  // Supports both absolute or relative paths.
+  public func derive(path:String, isAbsolute isAbsolutePath:Bool = true) -> ExtendedECKey? {
+    func keyFromLinkString(link:String) -> ExtendedECKey? {
+      var link = link.lowercaseString
+      if first(link) == "m" {
+        // only allow 'm' to be used at the begining of an absolute path or directly on the master key
+        if isAbsolutePath || self.isMaster {
+          return master
+        }
+        else {
+          return nil
+        }
+      }
+      else {
+        let isHardened = last(link) == "'"
+        if isHardened {
+          link = dropLast(link)
+        }
+        if let index = NSNumberFormatter().numberFromString(link)?.unsignedIntValue {
+          if isHardened {
+            return self.childKeyWithHardenedIndex(index)
+          }
+          else {
+            return self.childKeyWithIndex(index)
+          }
+        }
+        else {
+          return nil
+        }
+      }
+    }
+    
+    // seporate and parse the first link in the chain
+    let pathLinks = split(path, {$0 == "\\"} , maxSplit: 1, allowEmptySlices: false)
+    let link = pathLinks[0]
+    let key = keyFromLinkString(link)
+    // derive the rest of the path untill the last link is parsed
+    if pathLinks.count > 1 {
+      // the sub path can not be absolute.
+      return key?.derive(pathLinks[1], isAbsolute: false)
+    }
+    else {
+      return key
+    }
   }
 
   /// Returns whether or not this key is hardened. A hardened key has more secure properties.
