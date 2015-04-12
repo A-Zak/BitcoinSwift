@@ -151,7 +151,7 @@ public class ExtendedECKey : ECKey {
     var tries = 0
     while masterKey == nil {
       let result = SecRandomCopyBytes(kSecRandomDefault,
-                                      UInt(randomData.length),
+                                      Int(randomData.length),
                                       UnsafeMutablePointer<UInt8>(randomData.mutableBytes))
       assert(result == 0)
       masterKey = ExtendedECKey.masterKeyWithSeed(randomData, version:version)
@@ -252,7 +252,7 @@ public class ExtendedECKey : ECKey {
     }
     
     // seporate and parse the first link in the chain
-    let pathLinks = split(path, {$0 == "\\"} , maxSplit: 1, allowEmptySlices: false)
+    let pathLinks = split(path, maxSplit: 1, allowEmptySlices: false) {$0 == "\\"}
     let link = pathLinks[0]
     let key = keyFromLinkString(link)
     // derive the rest of the path untill the last link is parsed
