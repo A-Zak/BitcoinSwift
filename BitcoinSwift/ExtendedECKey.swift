@@ -8,17 +8,10 @@
 
 import Foundation
 
-
-
-
-public enum KeyType {
-  case PublicKey
-  case PrivateKey
-}
-
 public protocol ExtendedKeyVersionParameters: class {
-  var addresses: (pub:UInt32, prv: UInt32) { get }
-  func addressForKeyType(type:KeyType) -> UInt32
+  
+  var extendedPublicKeyVersion: NSData { get }
+  var extendedPrivateKeyVersion: NSData { get }
 }
 
 
@@ -30,122 +23,136 @@ public class ExtendedECKey : ECKey {
   
   public let chainCode: SecureData
   public let index: UInt32
-  public let version: ExtendedKeyVersionParameters
+  public let params: ExtendedKeyVersionParameters
   public let parent: ExtendedECKey?
   
-  
-  // This key's identifier (this corresponds exactly to a traditional bitcoin address)
-  public var identifier:NSData {
+  /// Returns the key's identifier (this corresponds exactly to a traditional bitcoin address).
+  public var identifier: NSData {
     return publicKey.SHA256Hash().RIPEMD160Hash()
   }
   
-  // Return this key's fingerprint
-  public var fingerprint:NSData {
+  /// Returns this key's fingerprint.
+  public var fingerprint: NSData {
     return self.identifier.subdataWithRange(NSMakeRange(0, 4))
   }
   
-  // Return the parent's fingerprint. 0x0000000 if master
-  public var parentFingerprint:NSData {
+  private class func masterParentFingerprint() -> NSData {
+    // TODO: Remove this once Swift supports class vars.
+    struct Static {
+      static let masterParentFingerprint: [UInt8] = [0x00, 0x00, 0x00, 0x00]
+    }
+    return NSData(bytes: Static.masterParentFingerprint,
+                 length: Static.masterParentFingerprint.count)
+  }
+  
+  private class func pathSeporator() -> Character {
+    // TODO: Remove this once Swift supports class vars.
+    struct Static {
+      static let pathSeporator: Character = "/"
+    }
+    return Static.pathSeporator
+  }
+  
+  /// Returns the parent's fingerprint. 0x0000000 if master.
+  public var parentFingerprint: NSData {
     if let parent = parent {
       return parent.fingerprint
-    }
-    else {
-      let masterprint: [UInt8] = [
-        0x00, 0x00, 0x00, 0x00]
-      return NSData(bytes: masterprint, length: masterprint.count)
+    } else {
+      return ExtendedECKey.masterParentFingerprint()
     }
   }
   
-  // Find the depth of this key
-  public var depth:UInt8 {
+  /// Returns the depth of this key.
+  public var depth: UInt8 {
     if let parent = parent {
       return parent.depth + 1
-    }
-    else {
+    } else {
       return 0
     }
   }
   
-  // True if this key has no parent
-  public var isMaster:Bool {
-    return self.parent == nil
+  /// Returns true if this key has no parent.
+  public var isMaster: Bool {
+    return parent == nil
   }
   
-  // Find the master key by traversing the parents until a parentless key is found.
-  public var master:ExtendedECKey {
+  /// Returns the master key by traversing the parents until a parentless key is found.
+  public var master: ExtendedECKey {
     if let parent = self.parent {
       return parent.master
-    }
-    else {
+    } else {
       return self
     }
   }
   
-  // Return an array of path components from the master key.
-  // Add apostrophe (') to hardened indexes, and use the letter (m) to represent the master - to make an absolute path.
-  public var pathComponents:Array<String> {
+  /// Returns an array of path components from the master key.
+  /// Adding apostrophe (') to hardened indexes, and use the letter (m) to represent the master
+  public var pathComponents: Array<String> {
     if let parent = self.parent {
       if let hIndex = self.hardenedIndex {
         return parent.pathComponents + [NSNumber(unsignedInt: hIndex).stringValue + "'"]
-      }
-      else {
+      } else {
         return parent.pathComponents + [NSNumber(unsignedInt: self.index).stringValue]
       }
-    }
-    else {
+    } else {
       return ["m"]
     }
   }
   
-  // Combines the path components into a string path separated with slashes (\)
-  public var path:String {
-    return "\\".join(self.pathComponents)
+  /// Returns the absolute path string.
+  public var path: String {
+    let seporator = String(ExtendedECKey.pathSeporator())
+    return seporator.join(self.pathComponents)
   }
   
-  // Serialize the extended key data
-  public func serializeExtendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> NSMutableData {
-    
-    func keyDataForType(type:KeyType) -> NSData {
-      
-      if type == .PublicKey {
-        return self.publicKey
-      }
-      else {
-        let keyData = NSMutableData()
-        keyData.appendUInt8(0x00)
-        keyData.appendData(self.privateKey.mutableData)
-        
-        return keyData
-      }
-    }
-    
+  private func serializedExtendedKey(#version: NSData, keyData: NSData) -> NSMutableData {
     let extKey = NSMutableData()
     
-    extKey.appendUInt32(version.addressForKeyType(type), endianness: .BigEndian)    // address
-    extKey.appendUInt8(self.depth)                                                  // depth
-    extKey.appendData(self.parentFingerprint)                                       // parent fingerprint
-    extKey.appendUInt32(self.index, endianness: .BigEndian)                         // child number
-    extKey.appendData(self.chainCode.mutableData)                                   // chain code
-    extKey.appendData(keyDataForType(type))                                         // public/private key
+    extKey.appendData(version)                              // version
+    extKey.appendUInt8(self.depth)                          // depth
+    extKey.appendData(self.parentFingerprint)               // parent fingerprint
+    extKey.appendUInt32(self.index, endianness: .BigEndian) // child number
+    extKey.appendData(self.chainCode.mutableData)           // chain code
+    extKey.appendData(keyData)                              // public/private key
     
     return extKey
   }
   
-  // Encode the extended key into a base64check string
-  public func encodeExtendedKey(ofType type:KeyType = .PublicKey, version: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> String {
+  private func encodedExtendedKey(extendedKey:NSData) -> String {
+    let keyData = NSMutableData(data: extendedKey)
+    let checksum = extendedKey.SHA256Hash().SHA256Hash().subdataWithRange(NSRange(location: 0, length: 4))
+    keyData.appendData(checksum)
     
-    let extKey = self.serializeExtendedKey(ofType: type, version: version)
-    
-    let checksum = extKey.SHA256Hash().SHA256Hash().subdataWithRange(NSRange(location: 0, length: 4))
-    extKey.appendData(checksum)
-    
-    return extKey.base58String
+    return keyData.base58String
   }
   
+  /// return a serialized public key data.
+  public func serializedExtendedPublicKey(params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> NSMutableData {
+    return serializedExtendedKey(version: params.extendedPublicKeyVersion, keyData: self.publicKey)
+  }
+  
+  /// return a serialized private key data.
+  public func serializedExtendedPrivateKey(params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> NSMutableData {
+    let keyData = NSMutableData()
+    keyData.appendUInt8(0x00)
+    keyData.appendData(self.privateKey.mutableData)
+    
+    return serializedExtendedKey(version: params.extendedPrivateKeyVersion, keyData: keyData)
+  }
+  
+  /// return a Base58 encoded public key.
+  public func encodedExtendedPublicKey(params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> String {
+    return encodedExtendedKey(serializedExtendedPublicKey(params: params))
+  }
+  
+  /// return a Base58 encoded private key.
+  public func encodedExtendedPrivateKey(params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> String {
+    return encodedExtendedKey(serializedExtendedPrivateKey(params: params))
+  }
 
   /// Creates a new master extended key (both private and public).
   /// Returns the key and the randomly-generated seed used to create the key.
-  public class func masterKey(version:BitcoinParameters = BitcoinMainNetParameters.get()) -> (key: ExtendedECKey, seed: SecureData) {
+  public class func masterKey(params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> (key: ExtendedECKey, seed: SecureData) {
     var masterKey: ExtendedECKey? = nil
     let randomData = SecureData(length: UInt(ECKey.privateKeyLength()))
     var tries = 0
@@ -154,7 +161,7 @@ public class ExtendedECKey : ECKey {
                                       UInt(randomData.length),
                                       UnsafeMutablePointer<UInt8>(randomData.mutableBytes))
       assert(result == 0)
-      masterKey = ExtendedECKey.masterKeyWithSeed(randomData, version:version)
+      masterKey = ExtendedECKey.masterKeyWithSeed(randomData, params: params)
       assert(++tries < 5)
     }
     return (masterKey!, randomData)
@@ -162,7 +169,7 @@ public class ExtendedECKey : ECKey {
 
   /// Can return nil in the (very very very very) unlikely case the randomly generated private key
   /// is invalid. If nil is returned, retry.
-  public class func masterKeyWithSeed(seed: SecureData, version:BitcoinParameters = BitcoinMainNetParameters.get()) -> ExtendedECKey? {
+  public class func masterKeyWithSeed(seed: SecureData, params: ExtendedKeyVersionParameters = BitcoinMainNetParameters.get()) -> ExtendedECKey? {
     let indexHash = seed.HMACSHA512WithKeyData(ExtendedECKey.masterKeySeed())
     let privateKey = indexHash[0..<32]
     let chainCode = indexHash[32..<64]
@@ -171,7 +178,7 @@ public class ExtendedECKey : ECKey {
         privateKeyInt.greaterThanOrEqual(ECKey.curveOrder()) {
       return nil
     }
-    return ExtendedECKey(privateKey: privateKey, chainCode: chainCode, version:version)
+    return ExtendedECKey(privateKey: privateKey, chainCode: chainCode, params:params)
   }
 
   /// Creates a new child key derived from self with index.
@@ -209,7 +216,8 @@ public class ExtendedECKey : ECKey {
     let childChainCode = indexHash[32..<64]
     return ExtendedECKey(privateKey: childPrivateKey, chainCode: childChainCode, index: index, parent:self)
   }
-
+  
+  /// Returns a new hardened child key derived from self with index.
   public func childKeyWithHardenedIndex(index: UInt32) -> ExtendedECKey? {
     // guard agains overflows
     if index > UInt32.max / 2 {
@@ -218,21 +226,23 @@ public class ExtendedECKey : ECKey {
     return childKeyWithIndex(index + ExtendedECKey.hardenedIndexOffset())
   }
 
-  // Derive a key from the path.
-  // Supports both absolute or relative paths.
-  public func derive(path:String, isAbsolute isAbsolutePath:Bool = true) -> ExtendedECKey? {
-    func keyFromLinkString(link:String) -> ExtendedECKey? {
+  /// Derive a key from the path.
+  /// Supports both absolute or relative paths.
+  /// The format is '/' delimitered, while 'm' represents the master key, and ' appended indexes
+  /// represend hardened indexes.
+  /// This follows the Bip32, which can be found here:
+  /// https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki
+  public func deriveFromExtendedKeyPath(path: String, isAbsolute isAbsolutePath: Bool = true) -> ExtendedECKey? {
+    func keyFromLinkString(link: String) -> ExtendedECKey? {
       var link = link.lowercaseString
       if first(link) == "m" {
         // only allow 'm' to be used at the begining of an absolute path or directly on the master key
         if isAbsolutePath || self.isMaster {
           return master
-        }
-        else {
+        } else {
           return nil
         }
-      }
-      else {
+      } else {
         let isHardened = last(link) == "'"
         if isHardened {
           link = dropLast(link)
@@ -240,27 +250,27 @@ public class ExtendedECKey : ECKey {
         if let index = NSNumberFormatter().numberFromString(link)?.unsignedIntValue {
           if isHardened {
             return self.childKeyWithHardenedIndex(index)
-          }
-          else {
+          } else {
             return self.childKeyWithIndex(index)
           }
-        }
-        else {
+        } else {
           return nil
         }
       }
     }
     
-    // seporate and parse the first link in the chain
-    let pathLinks = split(path, {$0 == "\\"} , maxSplit: 1, allowEmptySlices: false)
+    // seporate and parse the first link in the chain.
+    let pathLinks = split(path,
+                          {$0 == ExtendedECKey.pathSeporator()},
+                          maxSplit: 1,
+                          allowEmptySlices: false)
     let link = pathLinks[0]
     let key = keyFromLinkString(link)
-    // derive the rest of the path untill the last link is parsed
+    // derive the rest of the path untill the last link is parsed.
     if pathLinks.count > 1 {
       // the sub path can not be absolute.
-      return key?.derive(pathLinks[1], isAbsolute: false)
-    }
-    else {
+      return key?.deriveFromExtendedKeyPath(pathLinks[1], isAbsolute: false)
+    } else {
       return key
     }
   }
@@ -289,9 +299,9 @@ public class ExtendedECKey : ECKey {
     return 0x80000000
   }
 
-  private init(privateKey: SecureData, chainCode: SecureData, index: UInt32 = 0, parent:ExtendedECKey? = nil, version:BitcoinParameters? = nil) {
-    // version setting priority is parent, then specified verion, then defaults to MainNet
-    self.version = parent != nil ? parent!.version : version != nil ? version! : BitcoinMainNetParameters.get()
+  private init(privateKey: SecureData, chainCode: SecureData, index: UInt32 = 0, parent: ExtendedECKey? = nil, params: ExtendedKeyVersionParameters? = nil) {
+    // params setting priority is parent, then specified verion, then defaults to MainNet.
+    self.params = parent != nil ? parent!.params : params != nil ? params! : BitcoinMainNetParameters.get()
     
     self.parent = parent
     self.chainCode = chainCode
