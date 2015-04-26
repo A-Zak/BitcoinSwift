@@ -48,7 +48,8 @@ class BitcoinEncodingTests: XCTestCase {
 
   func testAppendUInt64LittleEndian() {
     var data = NSMutableData()
-    data.appendUInt64(UInt64(0x0102030405060708))
+    let uint64:UInt64 = 0x0102030405060708
+    data.appendUInt64(uint64)
     let expectedData = NSData(bytes: [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01] as [UInt8],
                               length: 8)
     XCTAssertEqual(data, expectedData)
@@ -56,7 +57,8 @@ class BitcoinEncodingTests: XCTestCase {
 
   func testAppendUInt64BigEndian() {
     var data = NSMutableData()
-    data.appendUInt64(UInt64(0x0102030405060708), endianness: .BigEndian)
+    let uint64:UInt64 = 0x0102030405060708
+    data.appendUInt64(uint64, endianness: .BigEndian)
     let expectedData = NSData(bytes: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08] as [UInt8],
                               length: 8)
     XCTAssertEqual(data, expectedData)
@@ -139,7 +141,8 @@ class BitcoinEncodingTests: XCTestCase {
 
   func testAppendVarIntUInt64() {
     var data = NSMutableData()
-    data.appendVarInt(0x0100000000)
+    let uint64:UInt64 = 0x0100000000
+    data.appendVarInt(uint64)
     let expectedData =
         NSData(bytes: [0xff, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00] as [UInt8], length: 9)
     XCTAssertEqual(data, expectedData)
