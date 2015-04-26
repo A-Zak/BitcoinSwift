@@ -129,14 +129,16 @@ class BitcoinDecodingTests: XCTestCase {
 
     // Test reading a little-endian UInt64.
     if let int = stream.readUInt64() {
-      XCTAssertEqual(int, UInt64(0x0807060504030201))
+      let expected:UInt64 = 0x0807060504030201
+      XCTAssertEqual(int, expected)
     } else {
       XCTFail("Failed to read int")
     }
 
     // Test reading a big-endian UInt64.
     if let int = stream.readUInt64(endianness: .BigEndian) {
-      XCTAssertEqual(int, UInt64(0x090a0b0c0d0e0f10))
+      let expected:UInt64 = 0x090a0b0c0d0e0f10
+      XCTAssertEqual(int, expected)
     } else {
       XCTFail("Failed to read int")
     }
@@ -362,7 +364,8 @@ class BitcoinDecodingTests: XCTestCase {
     let stream = NSInputStream(data: data)
     stream.open()
     if let uint64 = stream.readVarInt() {
-      XCTAssertEqual(uint64, UInt64(0x0102030405060708))
+      let expected:UInt64 = 0x0102030405060708
+      XCTAssertEqual(uint64, expected)
     } else {
       XCTFail("Failed to read varint")
     }
