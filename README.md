@@ -28,3 +28,4 @@ Roadmap (in order of priority)
 Transaction building and signing.  
 Wallet for tracking balance and transaction history.  
 Full SPV support with bloom filtering.  
+
